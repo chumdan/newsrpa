@@ -1,0 +1,148 @@
+/* Google Noto Sans KR 폰트 추가 */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
+
+:root {
+    --ckd-blue: #0066b3;  /* 종근당 로고 파란색 */
+}
+
+body {
+    background-color: #f8f9fa;
+    font-family: 'Noto Sans KR', sans-serif;
+}
+
+.container {
+    max-width: 950px;
+}
+
+.card {
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    border: none;
+    border-radius: 15px;
+}
+
+.card-header {
+    background-color: var(--ckd-blue);
+    border-radius: 15px 15px 0 0 !important;
+    padding: 1.5rem;
+}
+
+.logo-container {
+    text-align: center;
+    margin-bottom: 1rem;
+}
+
+.logo-img {
+    width: 100px;
+    height: auto;
+    margin-bottom: 1rem;
+}
+
+.btn-primary {
+    background-color: var(--ckd-blue);
+    border-color: var(--ckd-blue);
+    padding: 0.8rem 2rem;
+    font-size: 1.1rem;
+}
+
+.btn-primary:hover {
+    background-color: #005296;
+    border-color: #005296;
+}
+
+.form-control:focus {
+    border-color: var(--ckd-blue);
+    box-shadow: 0 0 0 0.2rem rgba(0, 102, 179, 0.25);
+}
+
+.feature-list {
+    background-color: #f8f9fa;
+    padding: 2rem;
+    border-radius: 10px;
+    margin: 1.5rem 0;
+}
+
+.feature-list li {
+    margin-bottom: 1.2rem;
+    color: #495057;
+    margin: 1.5rem 0;
+}
+
+/* 추가적인 스타일 */
+.text-ckd {
+    color: var(--ckd-blue);
+}
+
+.card-body {
+    padding: 2.5rem;
+}
+
+.form-label {
+    color: #495057;
+    font-weight: 500;
+}
+
+.form-control {
+    padding: 0.8rem 1rem;
+}
+
+.brand-subtitle {
+    font-size: 0.9rem;
+    opacity: 0.8;
+}
+/* 기능 리스트 스타일 수정 */
+.feature-list {
+    background-color: #f8f9fa;
+    padding: 1.5rem;
+    border-radius: 10px;
+    margin: 1rem 0;
+}
+
+.feature-list li {
+    margin-bottom: 1rem;
+    color: #495057;
+    list-style: none;
+    padding-left: 1.8rem;
+    position: relative;
+}
+
+.feature-list li::before {
+    position: absolute;
+    left: 0;
+    margin-right: 0.5rem;
+}
+
+.feature-list li:nth-child(1)::before {
+    content: '📰';
+}
+
+.feature-list li:nth-child(2)::before {
+    content: '📱';
+}
+
+.feature-list li:nth-child(3)::before {
+    content: '📊';
+}
+
+/* 푸터 스타일 추가 */
+.footer-text {
+    text-align: center;
+    color: #6c757d;
+    font-size: 0.9rem;
+    margin-top: 2rem;
+}
+
+/* 반응형 조정 */
+@media (max-width: 768px) {
+    .container {
+        max-width: 100%;
+        padding: 0 20px;
+    }
+    
+    .card {
+        margin: 0 10px;
+    }
+    
+    .feature-list li {
+        font-size: 0.95rem;
+    }
+}
