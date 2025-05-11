@@ -2,7 +2,7 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import NoSuchElementException, TimeoutException, ElementNotInteractableException
 from datetime import datetime, timedelta
 import time
 import smtplib
@@ -41,21 +41,168 @@ EMAIL_SENDER = os.getenv('SMTP_USER', 'ckdpharmamorning@gmail.com')
 # 로그가 필요할 때만 True로 변경
 DEBUG_SMTP = False  # 여기서 한 번만 설정하면 됨
 
+# 웹드라이버 설정 및 대기 시간 설정
+DEFAULT_TIMEOUT = 10  # 기본 대기 시간(초)
+PAGE_LOAD_TIMEOUT = 20  # 페이지 로딩 타임아웃(초)
+
 def setup_driver():
     driver = webdriver.Chrome()
-    wait = WebDriverWait(driver, 10)
-    driver.implicitly_wait(2)
+    wait = WebDriverWait(driver, DEFAULT_TIMEOUT)
+    driver.implicitly_wait(5)  # 암시적 대기 시간 증가
     driver.maximize_window()
+    driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)  # 페이지 로드 타임아웃 설정
     return driver, wait
 
-def collect_dailypharm_headlines(driver, wait):
-    print("\n=== 데일리팜 헤드라인 수집 시작 ===")
-    headlines = []
+def handle_popups(driver):
+    """일반적인 팝업을 처리하는 함수"""
+    try:
+        # 팝업 닫기 버튼들의 일반적인 속성들
+        popup_close_patterns = [
+            (By.XPATH, "//button[contains(text(), '닫기')]"),
+            (By.XPATH, "//a[contains(text(), '닫기')]"),
+            (By.XPATH, "//button[contains(text(), '취소')]"),
+            (By.XPATH, "//button[contains(text(), 'Close')]"),
+            (By.XPATH, "//button[@class='close']"),
+            (By.XPATH, "//button[contains(@class, 'popup-close')]"),
+            (By.XPATH, "//div[contains(@class, 'popup')]//button"),
+            (By.XPATH, "//div[contains(@class, 'modal')]//button"),
+            (By.XPATH, "//span[contains(text(), '×')]"),
+            (By.XPATH, "//button[contains(@class, 'btn-close')]"),
+            (By.CSS_SELECTOR, ".popup .close"),
+            (By.CSS_SELECTOR, ".modal .close"),
+            (By.CSS_SELECTOR, ".popup-container .close"),
+            (By.CSS_SELECTOR, ".modal-content .close")
+        ]
+
+        for selector_type, selector in popup_close_patterns:
+            try:
+                # 짧은 대기 시간으로 요소 찾기 시도
+                close_buttons = driver.find_elements(selector_type, selector)
+                for button in close_buttons:
+                    if button.is_displayed():
+                        print(f"팝업 닫기 버튼 발견: {selector}")
+                        button.click()
+                        time.sleep(0.5)  # 팝업이 닫히는 데 시간이 필요할 수 있음
+            except (NoSuchElementException, ElementNotInteractableException):
+                continue
+
+        # 알림 창 수락
+        try:
+            alert = driver.switch_to.alert
+            alert.accept()
+            print("알림 창을 닫았습니다.")
+        except:
+            pass  # 알림 창이 없는 경우 무시
+
+        return True
+    except Exception as e:
+        print(f"팝업 처리 중 오류 발생: {str(e)}")
+        return False
+
+def wait_for_page_load(driver, url, timeout=PAGE_LOAD_TIMEOUT):
+    """페이지가 완전히 로드될 때까지 대기하는 함수"""
+    try:
+        print(f"{url} 페이지 로딩 중...")
+        driver.get(url)
+        
+        # 페이지 로드 완료 대기
+        WebDriverWait(driver, timeout).until(
+            lambda d: d.execute_script("return document.readyState") == "complete"
+        )
+        
+        # 잠시 대기하여 동적 콘텐츠가 로드될 시간 제공
+        time.sleep(1)
+        
+        # 가능한 팝업 처리
+        handle_popups(driver)
+        
+        print(f"{url} 페이지 로딩 완료")
+        return True
+    except TimeoutException:
+        print(f"{url} 페이지 로드 시간 초과")
+        return False
+    except Exception as e:
+        print(f"{url} 페이지 로드 중 오류 발생: {str(e)}")
+        return False
+
+# 로깅 유틸리티 함수 추가
+def log_message(message, log_type="INFO"):
+    """
+    타임스탬프와 로그 유형을 포함한 로그 메시지를 출력하는 유틸리티 함수
+    
+    Args:
+        message: 로그 메시지
+        log_type: 로그 유형 (INFO, WARNING, ERROR, SUCCESS 등)
+    """
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    
+    # 로그 유형에 따른 색상 코드 (터미널에서만 작동)
+    colors = {
+        "INFO": "",      # 기본색
+        "WARNING": "\033[93m",  # 노란색
+        "ERROR": "\033[91m",    # 빨간색
+        "SUCCESS": "\033[92m",  # 초록색
+        "DEBUG": "\033[94m"     # 파란색
+    }
+    
+    reset_color = "\033[0m"  # 색상 리셋
+    
+    # 색상 적용 (지원되는 경우)
+    color_code = colors.get(log_type, "")
+    reset = reset_color if color_code else ""
     
     try:
-        # 메인 페이지 접속
-        driver.get("https://www.dailypharm.com/")
-        time.sleep(2)
+        print(f"[{timestamp}] {color_code}{log_type}: {message}{reset}")
+    except:
+        # 색상 코드가 지원되지 않는 환경에서는 일반 텍스트로 출력
+        print(f"[{timestamp}] {log_type}: {message}")
+
+def capture_screenshot(driver, name="error"):
+    """
+    현재 브라우저 상태의 스크린샷을 캡처하는 함수
+    
+    Args:
+        driver: Selenium 웹드라이버 인스턴스
+        name: 스크린샷 파일명 접두사
+        
+    Returns:
+        저장된 스크린샷 파일 경로 또는 None (실패 시)
+    """
+    try:
+        # 스크린샷 저장 디렉토리 생성
+        screenshot_dir = os.path.join(BASE_DIR, "screenshots")
+        os.makedirs(screenshot_dir, exist_ok=True)
+        
+        # 타임스탬프를 포함한 파일명 생성
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{name}_{timestamp}.png"
+        filepath = os.path.join(screenshot_dir, filename)
+        
+        # 스크린샷 저장
+        driver.save_screenshot(filepath)
+        log_message(f"스크린샷 저장 완료: {filepath}", "INFO")
+        
+        return filepath
+    except Exception as e:
+        log_message(f"스크린샷 캡처 실패: {str(e)}", "ERROR")
+        return None
+
+def collect_dailypharm_headlines(driver, wait):
+    log_message("데일리팜 헤드라인 수집 시작", "INFO")
+    headlines = []
+    start_time = datetime.now()
+    
+    try:
+        # 메인 페이지 접속 - 향상된 대기 로직 사용
+        url = "https://www.dailypharm.com/"
+        log_message(f"데일리팜 URL 접속 시도: {url}", "INFO")
+        
+        if not wait_for_page_load(driver, url):
+            log_message("데일리팜 페이지 로드 실패, 헤드라인 수집 건너뜀", "ERROR")
+            capture_screenshot(driver, "dailypharm_load_failed")
+            return []
+        
+        log_message("데일리팜 페이지 로드 성공", "SUCCESS")
         
         # 지정된 CSS 선택자로 헤드라인 가져오기
         selectors = [
@@ -68,9 +215,20 @@ def collect_dailypharm_headlines(driver, wait):
             "body > div.mainView > div:nth-child(2) > div.MainHeadLine > div.center > div.TopHead.d_TopHead_2 > div.subTop > ul > li:nth-child(7) > a"
         ]
         
-        for selector in selectors:
+        log_message(f"데일리팜 - {len(selectors)}개 선택자에서 헤드라인 수집 시도", "INFO")
+        
+        for idx, selector in enumerate(selectors, 1):
             try:
-                element = driver.find_element(By.CSS_SELECTOR, selector)
+                # 명시적 대기로 요소 찾기 시도
+                log_message(f"데일리팜 - 선택자 {idx}/{len(selectors)} 처리 중: {selector[:30]}...", "DEBUG")
+                try:
+                    element = WebDriverWait(driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                except TimeoutException:
+                    log_message(f"선택자 '{selector[:30]}...' 요소를 찾을 수 없습니다 (타임아웃).", "WARNING")
+                    continue
+                
                 headline = element.text.strip()
                 url = element.get_attribute('href') if element.tag_name == 'a' else ""
                 
@@ -81,16 +239,28 @@ def collect_dailypharm_headlines(driver, wait):
                         'url': url,
                         'published_at': datetime.now()
                     })
-                    print(f"데일리팜 헤드라인 수집: {headline}")
+                    log_message(f"데일리팜 헤드라인 수집: {headline}", "SUCCESS")
+                else:
+                    log_message(f"데일리팜 - 선택자 {idx} 요소 발견했으나 헤드라인 텍스트가 비어 있음", "WARNING")
             except Exception as e:
-                print(f"선택자 '{selector}' 처리 중 오류: {str(e)}")
+                log_message(f"선택자 '{selector[:30]}...' 처리 중 오류: {str(e)}", "ERROR")
         
-        print(f"데일리팜 헤드라인 총 {len(headlines)}건 수집 완료")
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+        log_message(f"데일리팜 헤드라인 총 {len(headlines)}건 수집 완료 ({duration:.2f}초 소요)", "SUCCESS")
+        
+        if len(headlines) == 0:
+            log_message("데일리팜에서 헤드라인을 찾지 못했습니다. 페이지 구조가 변경되었을 수 있습니다.", "WARNING")
+            capture_screenshot(driver, "dailypharm_no_headlines")
+        
         return headlines
             
     except Exception as e:
-        print(f"데일리팜 헤드라인 수집 중 에러 발생: {str(e)}")
-        print(f"스택 트레이스: {traceback.format_exc()}")
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+        log_message(f"데일리팜 헤드라인 수집 중 에러 발생: {str(e)} ({duration:.2f}초 소요)", "ERROR")
+        log_message(f"스택 트레이스: {traceback.format_exc()}", "ERROR")
+        capture_screenshot(driver, "dailypharm_error")
         return []
 
 def collect_yakup_headlines(driver, wait):
@@ -98,9 +268,11 @@ def collect_yakup_headlines(driver, wait):
     headlines = []
     
     try:
-        # 메인 페이지 접속
-        driver.get("https://yakup.com/")
-        time.sleep(2)
+        # 메인 페이지 접속 - 향상된 대기 로직 사용
+        url = "https://yakup.com/"
+        if not wait_for_page_load(driver, url):
+            print("약업닷컴 페이지 로드 실패, 헤드라인 수집 건너뜀")
+            return []
         
         # 지정된 CSS 선택자로 헤드라인 가져오기
         selectors = [
@@ -114,7 +286,15 @@ def collect_yakup_headlines(driver, wait):
         
         for selector in selectors:
             try:
-                element = driver.find_element(By.CSS_SELECTOR, selector)
+                # 명시적 대기로 요소 찾기 시도
+                try:
+                    element = WebDriverWait(driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                except TimeoutException:
+                    print(f"선택자 '{selector}' 요소를 찾을 수 없습니다 (타임아웃).")
+                    continue
+                
                 headline = element.text.strip()
                 
                 # 상위 a 태그에서 URL 가져오기
@@ -148,9 +328,11 @@ def collect_hitnews_headlines(driver, wait):
     headlines = []
     
     try:
-        # 메인 페이지 접속
-        driver.get("http://www.hitnews.co.kr/")
-        time.sleep(2)
+        # 메인 페이지 접속 - 향상된 대기 로직 사용
+        url = "http://www.hitnews.co.kr/"
+        if not wait_for_page_load(driver, url):
+            print("히트뉴스 페이지 로드 실패, 헤드라인 수집 건너뜀")
+            return []
         
         # 지정된 CSS 선택자로 헤드라인 가져오기
         selectors = [
@@ -164,7 +346,15 @@ def collect_hitnews_headlines(driver, wait):
         
         for selector in selectors:
             try:
-                element = driver.find_element(By.CSS_SELECTOR, selector)
+                # 명시적 대기로 요소 찾기 시도
+                try:
+                    element = WebDriverWait(driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                except TimeoutException:
+                    print(f"선택자 '{selector}' 요소를 찾을 수 없습니다 (타임아웃).")
+                    continue
+                
                 headline = element.text.strip()
                 
                 # a 태그인 경우 직접 URL 가져오기, 아닌 경우 상위 a 태그 찾기
@@ -200,9 +390,11 @@ def collect_kpanews_headlines(driver, wait):
     headlines = []
     
     try:
-        # 메인 페이지 접속
-        driver.get("https://www.kpanews.co.kr/")
-        time.sleep(2)
+        # 메인 페이지 접속 - 향상된 대기 로직 사용
+        url = "https://www.kpanews.co.kr/"
+        if not wait_for_page_load(driver, url):
+            print("약사공론 페이지 로드 실패, 헤드라인 수집 건너뜀")
+            return []
         
         # 지정된 CSS 선택자로 헤드라인 가져오기
         selectors = [
@@ -216,7 +408,15 @@ def collect_kpanews_headlines(driver, wait):
         
         for selector in selectors:
             try:
-                element = driver.find_element(By.CSS_SELECTOR, selector)
+                # 명시적 대기로 요소 찾기 시도
+                try:
+                    element = WebDriverWait(driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                except TimeoutException:
+                    print(f"선택자 '{selector}' 요소를 찾을 수 없습니다 (타임아웃).")
+                    continue
+                
                 headline = element.text.strip()
                 
                 # a 태그인 경우 직접 URL 가져오기, 아닌 경우 상위 a 태그 찾기
@@ -248,19 +448,157 @@ def collect_kpanews_headlines(driver, wait):
         return []
 
 # 4개 언론사의 헤드라인을 모두 수집하는 통합 함수
-def collect_all_headlines(driver, wait):
-    print("\n=== 4개 언론사 헤드라인 수집 시작 ===")
+def collect_all_headlines(driver, wait, max_retries=3, retry_delay=5):
+    """
+    4개 언론사의 헤드라인을 수집하는 통합 함수
     
-    # 각 사이트에서 헤드라인 수집
-    dailypharm_headlines = collect_dailypharm_headlines(driver, wait)
-    yakup_headlines = collect_yakup_headlines(driver, wait)
-    hitnews_headlines = collect_hitnews_headlines(driver, wait)
-    kpanews_headlines = collect_kpanews_headlines(driver, wait)
+    Args:
+        driver: Selenium 웹드라이버 인스턴스
+        wait: WebDriverWait 인스턴스
+        max_retries: 수집 실패 시 최대 재시도 횟수 (기본값: 3)
+        retry_delay: 재시도 간 대기 시간(초) (기본값: 5)
+        
+    Returns:
+        수집된 모든 헤드라인 목록
+    """
+    print("\n" + "="*50)
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 4개 언론사 헤드라인 수집 시작")
+    print("="*50)
     
-    # 모든 헤드라인 합치기
-    all_headlines = dailypharm_headlines + yakup_headlines + hitnews_headlines + kpanews_headlines
+    # 각 사이트별 수집 결과와 시도 횟수를 추적하는 로깅 데이터
+    collection_stats = {
+        'dailypharm': {'success': False, 'attempts': 0, 'count': 0, 'start_time': None, 'end_time': None},
+        'yakup': {'success': False, 'attempts': 0, 'count': 0, 'start_time': None, 'end_time': None},
+        'hitnews': {'success': False, 'attempts': 0, 'count': 0, 'start_time': None, 'end_time': None},
+        'kpanews': {'success': False, 'attempts': 0, 'count': 0, 'start_time': None, 'end_time': None}
+    }
     
-    print(f"\n총 {len(all_headlines)}개 헤드라인 수집 완료")
+    # 최종 수집된 헤드라인 목록
+    all_headlines = []
+    
+    # 각 사이트별 수집 함수와 사이트명을 매핑
+    sites = [
+        {'name': 'dailypharm', 'func': collect_dailypharm_headlines, 'korean_name': '데일리팜'},
+        {'name': 'yakup', 'func': collect_yakup_headlines, 'korean_name': '약업닷컴'},
+        {'name': 'hitnews', 'func': collect_hitnews_headlines, 'korean_name': '히트뉴스'},
+        {'name': 'kpanews', 'func': collect_kpanews_headlines, 'korean_name': '약사공론'}
+    ]
+    
+    # 각 사이트에서 헤드라인 수집 (재시도 로직 포함)
+    for site in sites:
+        site_name = site['name']
+        site_korean_name = site['korean_name']
+        collection_func = site['func']
+        
+        print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {site_korean_name} 수집 시작")
+        collection_stats[site_name]['start_time'] = datetime.now()
+        
+        headlines = []
+        attempts = 0
+        success = False
+        
+        # 최대 재시도 횟수만큼 시도
+        while attempts < max_retries and not success:
+            attempts += 1
+            collection_stats[site_name]['attempts'] = attempts
+            
+            try:
+                # 시도 횟수가 1보다 크면 재시도 메시지 출력
+                if attempts > 1:
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {site_korean_name} {attempts}번째 시도 중...")
+                
+                # 헤드라인 수집 시도
+                headlines = collection_func(driver, wait)
+                
+                # 결과 확인 및 로깅
+                if headlines and len(headlines) > 0:
+                    success = True
+                    collection_stats[site_name]['success'] = True
+                    collection_stats[site_name]['count'] = len(headlines)
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {site_korean_name} 수집 성공: {len(headlines)}건")
+                else:
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {site_korean_name} 수집 실패: 헤드라인이 없습니다.")
+                    
+                    # 마지막 시도가 아니면 잠시 대기 후 재시도
+                    if attempts < max_retries:
+                        # 지수 백오프: 시도 횟수에 따라 대기 시간 증가
+                        wait_time = retry_delay * (2 ** (attempts - 1))
+                        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {wait_time}초 후 재시도합니다.")
+                        time.sleep(wait_time)
+                        
+                        # 페이지 새로고침 시도
+                        try:
+                            driver.refresh()
+                            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 페이지 새로고침 완료")
+                        except Exception as refresh_err:
+                            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 페이지 새로고침 실패: {str(refresh_err)}")
+                    else:
+                        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {site_korean_name} 최대 시도 횟수 도달. 수집 포기.")
+            
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {site_korean_name} 수집 중 오류 발생: {str(e)}")
+                print(f"Stack trace: {traceback.format_exc()}")
+                
+                # 마지막 시도가 아니면 잠시 대기 후 재시도
+                if attempts < max_retries:
+                    wait_time = retry_delay * (2 ** (attempts - 1))
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {wait_time}초 후 재시도합니다.")
+                    time.sleep(wait_time)
+                else:
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {site_korean_name} 최대 시도 횟수 도달. 수집 포기.")
+        
+        # 수집 종료 시간 기록
+        collection_stats[site_name]['end_time'] = datetime.now()
+        duration = (collection_stats[site_name]['end_time'] - collection_stats[site_name]['start_time']).total_seconds()
+        
+        # 결과에 따른 로그 메시지
+        if success:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {site_korean_name} 수집 완료: {len(headlines)}건 ({duration:.1f}초 소요, {attempts}번 시도)")
+            # 헤드라인 추가
+            all_headlines.extend(headlines)
+        else:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {site_korean_name} 수집 실패: 헤드라인을 가져오지 못했습니다. ({duration:.1f}초 소요, {attempts}번 시도)")
+    
+    # 전체 결과 요약 출력
+    print("\n" + "="*50)
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 4개 언론사 헤드라인 수집 결과 요약")
+    print("-"*50)
+    
+    total_count = len(all_headlines)
+    success_sites = sum(1 for stats in collection_stats.values() if stats['success'])
+    total_attempts = sum(stats['attempts'] for stats in collection_stats.values())
+    
+    for site_name, stats in collection_stats.items():
+        site_korean = next((site['korean_name'] for site in sites if site['name'] == site_name), site_name)
+        status = "✓ 성공" if stats['success'] else "✗ 실패"
+        duration = (stats['end_time'] - stats['start_time']).total_seconds() if stats['end_time'] and stats['start_time'] else 0
+        print(f"{site_korean}: {status} | {stats['count']}건 | {stats['attempts']}번 시도 | {duration:.1f}초 소요")
+    
+    print("-"*50)
+    print(f"총 {total_count}건 수집 완료 (성공 사이트: {success_sites}/4, 총 시도 횟수: {total_attempts})")
+    print("="*50)
+    
+    # 수집된 헤드라인이 없으면 전체 재시도
+    if total_count == 0:
+        print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 모든 사이트에서 헤드라인을 수집하지 못했습니다. 전체 재시도를 시작합니다.")
+        # 브라우저 재시작
+        try:
+            driver.quit()
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 웹드라이버 종료")
+            time.sleep(3)
+            
+            # 새로운 드라이버 생성
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 새 웹드라이버 생성 중...")
+            driver, wait = setup_driver()
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 새 웹드라이버 생성 완료")
+            
+            # 재귀적으로 함수 호출 (단, 재시도 횟수는 1로 제한하여 무한 루프 방지)
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 전체 수집 과정 재시도 중...")
+            all_headlines = collect_all_headlines(driver, wait, max_retries=1, retry_delay=retry_delay)
+        except Exception as restart_err:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 웹드라이버 재시작 중 오류 발생: {str(restart_err)}")
+            print(f"Stack trace: {traceback.format_exc()}")
+    
     return all_headlines
 
 # 통계 정보 생성 함수
@@ -534,7 +872,7 @@ def generate_email_content(all_headlines):
     <div style="width: 80%; max-width: 800px; min-width: 500px; margin: 30px auto 0; font-size: 14px; color: #666; border-top: 1px solid #eee; padding-top: 20px; text-align: left;">
         <p>-------------------------------------------------</p>
         <p>문의사항 또는 개선요청사항이 있다면, 정보기획팀 <a href="mailto:ckdpharmamorning@gmail.com">ckdpharmamorning@gmail.com</a> 으로 문의 주세요. (내선:332)</p>
-        <p>뉴스레터 구독을 취소하시려면 <a href="{{ unsubscribe_link }}">여기</a>를 클릭하세요.</p>
+        <p>뉴스레터 구독을 취소하시려면 <a href="{{ unsubscribe_link }}'>여기</a>를 클릭하세요.</p>
     </div>
     """
     
@@ -1231,7 +1569,7 @@ def send_weekly_report_email(db: Session, recipients=None, start_date=None, end_
             retry_fail = 0
             
             for retry_batch_index, retry_batch in enumerate(retry_batches, 1):
-                print(f"\n=== 주간 리포트 최종 재시도 배치 {retry_batch_index}/{retry_total_batches} 처리 시작 ({len(retry_batch)}명) ===")
+                print(f"\n=== 최종 재시도 배치 {retry_batch_index}/{retry_total_batches} 처리 시작 ({len(retry_batch)}명) ===")
                 
                 for recipient in retry_batch:
                     try:

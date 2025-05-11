@@ -309,8 +309,10 @@ def headlines_now(db: Session = Depends(database.get_db)):
     """
     헤드라인 수집 및 이메일 발송을 수동으로 실행하는 엔드포인트
     수집한 뉴스를 DB에 저장하고 구독자에게 이메일로 발송
+    run_news_with_lock과 동일한 환경에서 테스트 가능
     """
     try:
+        # 헤드라인 수집 및 발송 (run_news_with_lock과 동일하게 구성)
         chrome_options = Options()
         chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
@@ -323,6 +325,7 @@ def headlines_now(db: Session = Depends(database.get_db)):
             all_headlines = collect_all_headlines(driver, wait)
             
             # 수집한 헤드라인을 DB에 저장
+            print("수집한 헤드라인을 DB에 저장합니다...")
             saved_count = 0
             for headline in all_headlines:
                 # 이미 존재하는 뉴스인지 확인
@@ -344,6 +347,7 @@ def headlines_now(db: Session = Depends(database.get_db)):
             
             # 변경사항 커밋
             db.commit()
+            print(f"DB에 {saved_count}건의 새로운 헤드라인이 저장되었습니다.")
             
             # 구독자 목록 가져오기
             subscribers = db.query(models.Subscriber).filter(models.Subscriber.is_active == True).all()
